@@ -2012,6 +2012,7 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 {
 	Connection_T c; ResultSet_T r; volatile int t = DM_SUCCESS;
 	uint64_t search_user_idnr = user_idnr;
+	uint64_t anyone_idnr;
 	char *spattern;
 	char *namespace, *username;
 	struct mailbox_match *mailbox_like = NULL;
@@ -2058,7 +2059,7 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 		db_stmt_set_str(stmt, prml++, DBMAIL_ACL_ANYONE_USER);
 		r = db_stmt_query(stmt);
 		while (db_result_next(r)) {
-			uint64_t anyone_idnr = db_result_get_u64(r, 0);
+			anyone_idnr = db_result_get_u64(r, 0);
 		}
 	CATCH(SQLException)
 		LOG_SQLERROR;
@@ -2134,6 +2135,10 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 	END_TRY;
 
 	g_string_free(qs, TRUE);
+	if (t == DM_EQUERY) {
+		mailbox_match_free(mailbox_like);
+		return t;
+	}
 
 	// build ACL sql
 	qs = g_string_new("");
