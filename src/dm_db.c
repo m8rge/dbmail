@@ -2069,6 +2069,10 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 	END_TRY;
 
 	g_string_free(qs, TRUE);
+	if (t == DM_EQUERY) {
+		if (mailbox_like) mailbox_match_free(mailbox_like);
+		return t;
+	}
 
 	// build main sql
 	qs = g_string_new("");
@@ -2137,7 +2141,7 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 
 	g_string_free(qs, TRUE);
 	if (t == DM_EQUERY) {
-		mailbox_match_free(mailbox_like);
+		if (mailbox_like) mailbox_match_free(mailbox_like);
 		return t;
 	}
 
