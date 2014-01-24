@@ -2067,14 +2067,14 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 	FINALLY
 		db_con_close(c);
 	END_TRY;
-	
+
 	g_string_free(qs, TRUE);
 
 	// build main sql
 	qs = g_string_new("");
 	g_string_printf(qs,
 			"SELECT distinct(mbx.name), mbx.mailbox_idnr, mbx.owner_idnr "
-			"FROM %smailboxes mbx "
+			"FROM %smailboxes mbx ",
 			DBPFX);
 
 	if (only_subscribed)
@@ -2146,7 +2146,7 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 	g_string_printf(qs,
 			"SELECT distinct(mbx.name), mbx.mailbox_idnr, mbx.owner_idnr "
 			"FROM %smailboxes mbx "
-			"LEFT JOIN %sacl acl ON mbx.mailbox_idnr = acl.mailbox_id "
+			"LEFT JOIN %sacl acl ON mbx.mailbox_idnr = acl.mailbox_id ",
 			DBPFX, DBPFX);
 
 	if (only_subscribed)
