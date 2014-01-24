@@ -2047,13 +2047,33 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 	if ( (! strchr(spattern, '%')) && (! strchr(spattern,'*')) )
 		mailbox_like = mailbox_match_new(spattern);
 
+	// get DBMAIL_ACL_ANYONE_USER idnr
+	qs = g_string_new("");
+	g_string_printf(qs, "SELECT user_idnr FROM %susers WHERE userid=?", DBPFX);
+	c = db_con_get();
+	TRY
+		stmt = db_stmt_prepare(c, qs->str);
+		prml = 1;
+
+		db_stmt_set_str(stmt, prml++, DBMAIL_ACL_ANYONE_USER);
+		r = db_stmt_query(stmt);
+		while (db_result_next(r)) {
+			uint64_t anyone_idnr = db_result_get_u64(r, 0);
+		}
+	CATCH(SQLException)
+		LOG_SQLERROR;
+		t = DM_EQUERY;
+	FINALLY
+		db_con_close(c);
+	END_TRY;
+	g_string_free(qs, TRUE);
+
+	// build main sql
 	qs = g_string_new("");
 	g_string_printf(qs,
 			"SELECT distinct(mbx.name), mbx.mailbox_idnr, mbx.owner_idnr "
 			"FROM %smailboxes mbx "
-			"LEFT JOIN %sacl acl ON mbx.mailbox_idnr = acl.mailbox_id "
-			"LEFT JOIN %susers usr ON acl.user_id = usr.user_idnr ",
-			DBPFX, DBPFX, DBPFX);
+			DBPFX);
 
 	if (only_subscribed)
 		g_string_append_printf(qs, 
@@ -2064,10 +2084,7 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 				"WHERE 1=1 ");
 
 	g_string_append_printf(qs, 
-			"AND ((mbx.owner_idnr=?) "
-			"%s (acl.user_id=? AND acl.lookup_flag=1) "
-			"OR (usr.userid=? AND acl.lookup_flag=1)) ",
-			search_user_idnr==user_idnr?"OR":"AND"
+			"AND (mbx.owner_idnr=?) "
 	);
 
 	if (mailbox_like && mailbox_like->insensitive)
@@ -2084,8 +2101,6 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 			db_stmt_set_u64(stmt, prml++, user_idnr);
 
 		db_stmt_set_u64(stmt, prml++, search_user_idnr);
-		db_stmt_set_u64(stmt, prml++, user_idnr);
-		db_stmt_set_str(stmt, prml++, DBMAIL_ACL_ANYONE_USER);
 
 		if (mailbox_like && mailbox_like->insensitive)
 			db_stmt_set_str(stmt, prml++, mailbox_like->insensitive);
@@ -2120,6 +2135,80 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 
 	g_string_free(qs, TRUE);
 
+	// build ACL sql
+	qs = g_string_new("");
+	g_string_printf(qs,
+			"SELECT distinct(mbx.name), mbx.mailbox_idnr, mbx.owner_idnr "
+			"FROM %smailboxes mbx "
+			"LEFT JOIN %sacl acl ON mbx.mailbox_idnr = acl.mailbox_id "
+			DBPFX, DBPFX);
+
+	if (only_subscribed)
+		g_string_append_printf(qs, 
+				"LEFT JOIN %ssubscription sub ON sub.mailbox_id = mbx.mailbox_idnr "
+				"WHERE ( sub.user_id=? ) ", DBPFX);
+	else
+		g_string_append_printf(qs, 
+				"WHERE 1=1 ");
+
+	g_string_append_printf(qs, 
+			"AND (acl.lookup_flag = 1 AND (acl.user_id = ? OR acl.user_id = ?))"
+	);
+
+	if (mailbox_like && mailbox_like->insensitive)
+		g_string_append_printf(qs, " AND mbx.name %s ? ", db_get_sql(SQL_INSENSITIVE_LIKE));
+	if (mailbox_like && mailbox_like->sensitive)
+		g_string_append_printf(qs, " AND mbx.name %s ? ", db_get_sql(SQL_SENSITIVE_LIKE));
+
+	c = db_con_get();
+	TRY
+		stmt = db_stmt_prepare(c, qs->str);
+		prml = 1;
+
+		if (only_subscribed)
+			db_stmt_set_u64(stmt, prml++, user_idnr);
+
+		db_stmt_set_u64(stmt, prml++, user_idnr);
+		db_stmt_set_u64(stmt, prml++, anyone_idnr);
+
+		if (mailbox_like && mailbox_like->insensitive)
+			db_stmt_set_str(stmt, prml++, mailbox_like->insensitive);
+		if (mailbox_like && mailbox_like->sensitive)
+			db_stmt_set_str(stmt, prml++, mailbox_like->sensitive);
+
+		r = db_stmt_query(stmt);
+		while (db_result_next(r)) {
+			n_rows++;
+			char *mailbox_name;
+			char *simple_mailbox_name = g_strdup(db_result_get(r, 0));
+			uint64_t mailbox_idnr = db_result_get_u64(r, 1);
+			uint64_t owner_idnr = db_result_get_u64(r,2);
+
+			/* add possible namespace prefix to mailbox_name */
+			mailbox_name = mailbox_add_namespace(simple_mailbox_name, owner_idnr, user_idnr);
+			TRACE(TRACE_DEBUG, "adding namespace prefix to [%s] got [%s]", simple_mailbox_name, mailbox_name);
+			if (mailbox_name) {
+				uint64_t *id = g_new0(uint64_t,1);
+				*id = mailbox_idnr;
+				if (search_user_idnr == user_idnr) {
+					*(GList **)mailboxes = g_list_prepend(*(GList **)mailboxes, id);
+				} else {
+					*(GList **)mailboxes = g_list_remove(*(GList **)mailboxes, id);
+				}
+			}
+			g_free(simple_mailbox_name);
+			g_free(mailbox_name);
+		}
+	CATCH(SQLException)
+		LOG_SQLERROR;
+		t = DM_EQUERY;
+	FINALLY
+		db_con_close(c);
+	END_TRY;
+
+	g_string_free(qs, TRUE);
+
+	// done
 	if (mailbox_like) mailbox_match_free(mailbox_like);
 	if (t == DM_EQUERY) return t;
 	if (n_rows == 0) return DM_SUCCESS;
