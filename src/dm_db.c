@@ -2067,6 +2067,7 @@ static int mailboxes_by_regex(uint64_t user_idnr, int only_subscribed, const cha
 	FINALLY
 		db_con_close(c);
 	END_TRY;
+	
 	g_string_free(qs, TRUE);
 
 	// build main sql
