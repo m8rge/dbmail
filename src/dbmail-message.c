@@ -326,38 +326,96 @@ static GMimeContentType *find_type(const char *s)
 #define MAX_MIME_DEPTH 64
 #define MAX_MIME_BLEN 128
 
-static bool find_boundary(const char *s, char *boundary)
+static bool simple_boundary(const char *s, char *boundary)
 {
 	int i = 0;
-	char *rest = NULL;
 	bool wantquote = false;
+	s += 9; // jump past 'boundary='
+	if (s[0] == '"') {
+		wantquote=true;
+		s++;
+	}
+	while (s[i]) {
+		if (wantquote && s[i]=='"') {
+			break;
+		}
+		if (! wantquote && (isspace(s[i]) || s[i]==';'))
+			break;
+		i++;
+	}
+		
+	strncpy(boundary, s, min(i, MAX_MIME_BLEN-1));
+	return true;
+}
+
+static bool wrapped_boundary(const char *s, char *boundary)
+{
+	int i = 0;
+	char *match;
+	int decimal = 0;
+	size_t buflen = MAX_MIME_BLEN-1;
+	s += 11; // jump past 'boundary*0='
+	while (true) {
+		bool wantquote = false;
+		if (s[0] == '"') {
+			wantquote = true;
+			s++;
+		}
+		while (s[i]) {
+			if (wantquote && s[i] == '"')
+				break;
+			if (! wantquote && (isspace(s[i]) || s[i]==';'))
+				break;
+			i++;
+		}
+		strncat(boundary, s, min(i, (int)buflen));
+
+		if (! s[i])
+			break;
+
+		buflen -= i;
+		decimal++;
+		match = g_strdup_printf("boundary*%d=", decimal);
+		TRACE(TRACE_DEBUG, "search [%s] for [%s]", &s[i], match);
+		s = g_strcasestr(&s[i], match);
+		TRACE(TRACE_DEBUG, "search: [%s]", s);
+		if (! s) {
+			g_free(match);
+			break;
+		}
+
+		s += strlen(match);
+		i = 0;
+		g_free(match);
+
+		if (! s[i])
+			break;
+
+	}
+	return true;
+}
+
+
+static bool find_boundary(const char *s, char *boundary)
+{
+	char *rest = NULL;
 	char *type = find_type_header(s);
 
 	memset(boundary, 0, MAX_MIME_BLEN);
 	if (! type)
 		return false;
-	rest = g_strcasestr(type, "boundary=");
-	if (! rest) {
+
+	if ((rest = g_strcasestr(type, "boundary="))) {
 		g_free(type);
-		return false;
+		return simple_boundary(rest, boundary);
 	}
-	rest += 9; // jump past 'boundary='
-	if (rest[0] == '"') {
-		wantquote=true;
-		rest++;
+	if ((rest = g_strcasestr(type, "boundary*0="))) {
+		g_free(type);
+		return wrapped_boundary(rest, boundary);
 	}
-	while (rest[i]) {
-		if (wantquote && rest[i]=='"') {
-			break;
-		}
-		if (! wantquote && (isspace(rest[i]) || rest[i]==';'))
-			break;
-		i++;
-	}
-		
-	strncpy(boundary, rest, min(i, MAX_MIME_BLEN-1));
+
 	g_free(type);
-	return true;
+	return false;
 }
 
 static DbmailMessage * _mime_retrieve(DbmailMessage *self)
@@ -1303,8 +1361,8 @@ void _message_cache_envelope_date(const DbmailMessage *self)
 	char *value;
 	char datefield[32];
 	char sortfield[CACHE_WIDTH];
-	uint64_t headervalue_id;
-	uint64_t headername_id;
+	uint64_t headervalue_id = 0;
+	uint64_t headername_id = 0;
 
 	value = g_mime_utils_header_format_date(
 			self->internal_date, 
@@ -1320,7 +1378,8 @@ void _message_cache_envelope_date(const DbmailMessage *self)
 	strftime(datefield, sizeof(datefield)-1, "%Y-%m-%d", gmtime(&date));
 
 	_header_name_get_id(self, "Date", &headername_id);
-	_header_value_get_id(value, sortfield, datefield, &headervalue_id);
+	if (headername_id)
+		_header_value_get_id(value, sortfield, datefield, &headervalue_id);
 
 	if (headervalue_id && headername_id)
 		_header_insert(self->id, headername_id, headervalue_id);
@@ -1393,6 +1452,8 @@ static int _header_name_get_id(const DbmailMessage *self, const char *header, ui
 	gpointer cacheid;
 	gchar *case_header, *safe_header, *frag;
 	Connection_T c; ResultSet_T r; PreparedStatement_T s;
+	Field_T config;
+	volatile bool cache_readonly = false;
 	volatile int t = FALSE;
 
 	// rfc822 headernames are case-insensitive
@@ -1401,6 +1462,13 @@ static int _header_name_get_id(const DbmailMessage *self, const char *header, ui
 		*id = *(uint64_t *)cacheid;
 		g_free(safe_header);
 		return 1;
+	}
+
+	config_get_value("header_cache_readonly", "DBMAIL", config);
+	if (strlen(config)) {
+		if (MATCH(config, "true") || MATCH(config, "yes")) {
+			cache_readonly = true;
+		}
 	}
 
 	case_header = g_strdup_printf(db_get_sql(SQL_STRCASE),"headername");
@@ -1417,6 +1485,9 @@ static int _header_name_get_id(const DbmailMessage *self, const char *header, ui
 
 		if (db_result_next(r)) {
 			*tmp = db_result_get_u64(r,0);
+		} else if (cache_readonly) {
+			*tmp = 0;
+			TRACE(TRACE_DEBUG, "skip: [%s] since headername table is readonly", safe_header);
 		} else {
 			db_con_clear(c);
 
@@ -1632,14 +1703,14 @@ static GString * _header_addresses(InternetAddressList *ialist)
 
 static void _header_cache(const char *header, const char *raw, gpointer user_data)
 {
-	uint64_t headername_id;
+	uint64_t headername_id = 0;
 	uint64_t headervalue_id;
 	DbmailMessage *self = (DbmailMessage *)user_data;
 	time_t date;
 	volatile gboolean isaddr = 0, isdate = 0, issubject = 0;
 	const char *charset = dbmail_message_get_charset(self);
 	char datefield[32];
-	char sortfield[CACHE_WIDTH];
+	char sortfield[CACHE_WIDTH*4];
 	char *value = NULL;
 	InternetAddressList *emaillist;
 	InternetAddress *ia;
@@ -1653,6 +1724,8 @@ static void _header_cache(const char *header, const char *raw, gpointer user_dat
 	TRACE(TRACE_DEBUG,"headername [%s]", header);
 
 	if ((_header_name_get_id(self, header, &headername_id) < 0))
+		return;
+	if (! headername_id)
 		return;
 
 	if (g_ascii_strcasecmp(header,"From")==0)
@@ -1719,7 +1792,7 @@ static void _header_cache(const char *header, const char *raw, gpointer user_dat
 	if(issubject) {
 		char *s, *t = dm_base_subject(value);
 		s = dbmail_iconv_str_to_db(t, charset);
-		g_strlcpy(sortfield, s, CACHE_WIDTH-1);
+		g_utf8_strncpy(sortfield, s, CACHE_WIDTH-1);
 		g_free(s);
 		g_free(t);
 	}
@@ -1738,7 +1811,7 @@ static void _header_cache(const char *header, const char *raw, gpointer user_dat
 	}
 
 	if (sortfield[0] == '\0')
-		g_strlcpy(sortfield, value, CACHE_WIDTH-1);
+		g_utf8_strncpy(sortfield, value, CACHE_WIDTH-1);
 
 	/* Fetch header value id if exists, else insert, and return new id */
 	_header_value_get_id(value, sortfield, datefield, &headervalue_id);

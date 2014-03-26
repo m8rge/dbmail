@@ -80,8 +80,8 @@ int do_showhelp(void) {
 	"               the time syntax is [<hours>h][<minutes>m]\n"
 	"               valid examples: 72h, 4h5m, 10m\n"
 	"     -M        migrate legacy 2.2.x messageblks to mimeparts table\n"
-	"     --erase days  Detele messages older than date in INBOX/Trash \n"       
-	"     --move  days   Move messages from INBOX to INBOX/Trash\n"
+	"     --erase days  Delete messages older than date in INBOX/Trash \n"       
+	"     --move  days  Move messages from INBOX to INBOX/Trash\n"
 	"     --inbox name  Inbox folder to move from, used in conjunction with --move\n"
 	"     --trash name  Trash folder to move to, used in conjunction with --move\n"
 	"     -m limit  limit migration to [limit] number of physmessages. Default 10000 per run\n"
@@ -703,22 +703,33 @@ int do_check_integrity(void)
 	/* end part 5 */
 
 	/* part 6 */
-	start = stop;
-	qprintf("\n%s DBMAIL headernames integrity...\n", action);
-	if ((count = db_icheck_headernames(cleanup)) < 0) {
-		qerrorf("Failed. An error occurred. Please check log.\n");
-		serious_errors = 1;
-		return -1;
+        Field_T config;
+	bool cache_readonly = false;
+	config_get_value("header_cache_readonly", "DBMAIL", config);
+	if (strlen(config)) {
+		if (MATCH(config, "true") || MATCH(config, "yes")) {
+			cache_readonly = true;
+		}
 	}
 
-	qprintf("Ok. Found [%ld] unconnected headernames.\n", count);
-	if (count > 0 && cleanup) {
-		qerrorf("Ok. Orphaned headernames deleted.\n");
-	}
+        if (! cache_readonly) {
+		start = stop;
+		qprintf("\n%s DBMAIL headernames integrity...\n", action);
+		if ((count = db_icheck_headernames(cleanup)) < 0) {
+			qerrorf("Failed. An error occurred. Please check log.\n");
+			serious_errors = 1;
+			return -1;
+		}
 
-	time(&stop);
-	qverbosef("--- %s unconnected headernames took %g seconds\n",
-		action, difftime(stop, start));
+		qprintf("Ok. Found [%ld] unconnected headernames.\n", count);
+		if (count > 0 && cleanup) {
+			qerrorf("Ok. Orphaned headernames deleted.\n");
+		}
+
+		time(&stop);
+		qverbosef("--- %s unconnected headernames took %g seconds\n",
+			action, difftime(stop, start));
+	}
 	/* end part 6 */
 
 	/* part 7 */
@@ -1002,7 +1013,7 @@ int do_migrate(int migrate_limit)
 	
 	qprintf ("Migrate legacy 2.2.x messageblks to mimeparts...\n");
 	if (!yes_to_all) {
-		qprintf ("\tmigration skipped. Use -y option to perform mirgration.\n");
+		qprintf ("\tmigration skipped. Use -y option to perform migration.\n");
 		return 0;
 	}
 	qprintf ("Preparing to migrate up to %d physmessages.\n", migrate_limit);
@@ -1011,7 +1022,6 @@ int do_migrate(int migrate_limit)
 	TRY
 		db_begin_transaction(c);
 		r = db_query(c, "SELECT DISTINCT(physmessage_id) FROM %smessageblks LIMIT %d", DBPFX, migrate_limit);
-		qprintf ("Migrating %d physmessages...\n", migrate_limit);
 		while (db_result_next(r))
 		{
 			count++;
