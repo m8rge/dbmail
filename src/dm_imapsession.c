@@ -779,6 +779,7 @@ static void _fetch_headers(ImapSession *self, body_fetch *bodyfetch, gboolean no
 			"LEFT JOIN %sheadervalue v ON h.headervalue_id=v.id "
 			"WHERE m.mailbox_idnr = %" PRIu64 " "
 			"AND m.message_idnr %s "
+			"HAVING headername IS NOT NULL "
 			"ORDER BY message_idnr, seq",
 			not?"":fieldorder->str,
 			DBPFX, DBPFX, DBPFX, DBPFX,
