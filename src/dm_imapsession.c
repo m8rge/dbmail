@@ -775,11 +775,10 @@ static void _fetch_headers(ImapSession *self, body_fetch *bodyfetch, gboolean no
 	p_string_printf(query, "SELECT m.message_idnr, n.headername, v.headervalue%s "
 			"FROM %sheader h "
 			"LEFT JOIN %smessages m ON h.physmessage_id=m.physmessage_id "
-			"LEFT JOIN %sheadername n ON h.headername_id=n.id "
+			"LEFT JOIN %sheadername n ON h.headername_id=n.id AND n.headername %s IN ('%s') "
 			"LEFT JOIN %sheadervalue v ON h.headervalue_id=v.id "
 			"WHERE m.mailbox_idnr = %" PRIu64 " "
 			"AND m.message_idnr %s "
-			"AND n.headername %s IN ('%s') "
 			"ORDER BY message_idnr, seq",
 			not?"":fieldorder->str,
 			DBPFX, DBPFX, DBPFX, DBPFX,
