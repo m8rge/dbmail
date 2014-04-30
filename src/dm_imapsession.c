@@ -782,9 +782,10 @@ static void _fetch_headers(ImapSession *self, body_fetch *bodyfetch, gboolean no
 			"HAVING headername IS NOT NULL "
 			"ORDER BY message_idnr, seq",
 			not?"":fieldorder->str,
-			DBPFX, DBPFX, DBPFX, DBPFX,
-			self->mailbox->id, p_string_str(range), 
-			not?"NOT":"", bodyfetch->hdrnames);
+			DBPFX, DBPFX, DBPFX, 
+			not?"NOT":"", bodyfetch->hdrnames, 
+			DBPFX,
+			self->mailbox->id, p_string_str(range));
 
 	if (fieldorder)
 		g_string_free(fieldorder, TRUE);
